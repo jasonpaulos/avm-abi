@@ -315,6 +315,38 @@ func decodeUint(encoded []byte, bitSize uint16) (interface{}, error) {
 	}
 }
 
+func interfaceToUint64(i interface{}) (uint64, error) {
+	switch value := i.(type) {
+	case byte:
+		return uint64(value), nil
+	case uint16:
+		return uint64(value), nil
+	case uint32:
+		return uint64(value), nil
+	case uint64:
+		return uint64(value), nil
+	default:
+		return 0, fmt.Errorf("Cannot convert type %T to uint64", i)
+	}
+}
+
+func interfaceToBigInt(i interface{}) (*big.Int, error) {
+	switch value := i.(type) {
+	case byte:
+		return big.NewInt(int64(value)), nil
+	case uint16:
+		return big.NewInt(int64(value)), nil
+	case uint32:
+		return big.NewInt(int64(value)), nil
+	case uint64:
+		return new(big.Int).SetUint64(value), nil
+	case *big.Int:
+		return value, nil
+	default:
+		return nil, fmt.Errorf("Cannot convert type %T to uint64", i)
+	}
+}
+
 // Decode is an ABI type method to decode bytes to go values from ABI encoding rules
 func (t Type) Decode(encoded []byte) (interface{}, error) {
 	switch t.abiTypeID {
@@ -341,6 +373,118 @@ func (t Type) Decode(encoded []byte) (interface{}, error) {
 			return nil, err
 		}
 		return castedType.Decode(encoded)
+	case Address:
+		if len(encoded) != addressByteSize {
+			return nil, fmt.Errorf("address should be length 32")
+		}
+		return encoded, nil
+	case ArrayDynamic:
+		if len(encoded) < lengthEncodeByteSize {
+			return nil, fmt.Errorf("dynamic array format corrupted")
+		}
+		dynamicLen := binary.BigEndian.Uint16(encoded[:lengthEncodeByteSize])
+		castedType, err := t.typeCastToTuple(int(dynamicLen))
+		if err != nil {
+			return nil, err
+		}
+		return castedType.Decode(encoded[lengthEncodeByteSize:])
+	case String:
+		if len(encoded) < lengthEncodeByteSize {
+			return nil, fmt.Errorf("string format corrupted")
+		}
+		stringLenBytes := encoded[:lengthEncodeByteSize]
+		byteLen := binary.BigEndian.Uint16(stringLenBytes)
+		if len(encoded[lengthEncodeByteSize:]) != int(byteLen) {
+			return nil, fmt.Errorf("string representation in byte: length not matching")
+		}
+		return string(encoded[lengthEncodeByteSize:]), nil
+	case Tuple:
+		return decodeTuple(encoded, t.childTypes)
+	default:
+		return nil, fmt.Errorf("cannot infer type for decoding")
+	}
+}
+
+func resolve(rv reflect.Value) reflect.Value {
+	// resolve pointers until getting to a concrete value?
+	return reflect.Value{}
+}
+
+// DecodeInto is an ABI type method to decode bytes into a predetermined go value, using ABI
+// encoding rules
+func (t Type) DecodeInto(encoded []byte, output interface{}) error {
+	reflectPtr := reflect.ValueOf(output)
+	if reflectPtr.Kind() != reflect.Ptr || reflectPtr.IsNil() {
+		return fmt.Errorf("Expected a non-nil pointer argument")
+	}
+
+	reflectValue := reflectPtr.Elem()
+
+	if reflectValue.Kind() == reflect.Interface {
+		result, err := t.Decode(encoded)
+		if err != nil {
+			return err
+		}
+		reflectValue.Set(reflect.ValueOf(result))
+		return nil
+	}
+
+	switch t.abiTypeID {
+	case Uint, Ufixed:
+		value, err := decodeUint(encoded, t.bitSize)
+		if err != nil {
+			return err
+		}
+
+		switch reflectValue.Kind() {
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			uintValue, err := interfaceToUint64(value)
+			if err != nil {
+				return err
+			}
+			reflectValue.SetUint(uintValue)
+		case reflect.Ptr:
+			if reflectPtr.Type().Elem() != reflect.TypeOf(big.Int{}) {
+				// TODO
+			}
+		}
+		return fmt.Errorf("Cannot decode ABI bool value into Go type %v", reflectValue.Type())
+	case Bool:
+		value, err := t.Decode(encoded)
+		if err != nil {
+			return err
+		}
+
+		if reflectValue.Kind() != reflect.Bool {
+			return fmt.Errorf("Cannot decode ABI bool value into Go type %v", reflectValue.Type())
+		}
+
+		if boolValue, ok := value.(bool); ok {
+			reflectValue.SetBool(boolValue)
+			return nil
+		}
+
+		return fmt.Errorf("Expected type bool, got %T", value)
+	case Byte:
+		value, err := t.Decode(encoded)
+		if err != nil {
+			return err
+		}
+		switch reflectValue.Kind() {
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if byteValue, ok := value.(byte); ok {
+				reflectValue.SetUint(uint64(byteValue))
+				return nil
+			}
+			return fmt.Errorf("Expected type byte, got %T", value)
+		}
+		return fmt.Errorf("Cannot decode ABI bool value into Go type %v", reflectValue.Type())
+	case ArrayStatic:
+		castedType, err := t.typeCastToTuple()
+		if err != nil {
+			return err
+		}
+		return castedType.DecodeInto(encoded, output)
 	case Address:
 		if len(encoded) != addressByteSize {
 			return nil, fmt.Errorf("address should be length 32")
@@ -456,6 +600,11 @@ func decodeTuple(encoded []byte, childT []Type) ([]interface{}, error) {
 		}
 	}
 	return values, nil
+}
+
+func decodeTupleInto(encoded []byte, childT []Type, output reflect.Value) error {
+	// TODO
+	return nil
 }
 
 // ParseMethodSignature parses a method of format `method(argType1,argType2,...)retType`
