@@ -1,8 +1,12 @@
 package abi
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"math"
 	"math/big"
 	"testing"
 
@@ -1199,4 +1203,143 @@ func TestInferToSlice(t *testing.T) {
 		t, err,
 		"cannot infer an interface value as a slice of interface element",
 		"inferToSlice should return type inference error when passing argument type other than slice or array")
+}
+
+func TestEncodeUint(t *testing.T) {
+	uintType, err := TypeOf("uint64")
+	require.NoError(t, err)
+
+	testcases := []struct {
+		input    interface{}
+		expected []byte
+	}{
+		{
+			input:    uint64(17),
+			expected: []byte{0, 0, 0, 0, 0, 0, 0, 17},
+		},
+	}
+
+	for _, tc := range testcases {
+		actual, err := uintType.Encode(tc.input)
+		require.NoError(t, err)
+		require.Equal(t, tc.expected, actual)
+
+		decoded, err := uintType.Decode(actual)
+		require.NoError(t, err)
+		require.Equal(t, tc.input, decoded)
+	}
+}
+
+func FuzzEncodeUint(f *testing.F) {
+	testcases := []uint64{0, 17, math.MaxUint64}
+	for _, tc := range testcases {
+		f.Add(tc)
+	}
+
+	uintType, err := TypeOf("uint64")
+	require.NoError(f, err)
+
+	f.Fuzz(func(t *testing.T, input uint64) {
+		actual, err := uintType.Encode(input)
+		require.NoError(t, err)
+
+		require.Len(t, actual, int(uintType.bitSize)/8)
+
+		decoded, err := uintType.Decode(actual)
+		require.NoError(t, err)
+		require.Equal(t, input, decoded.(uint64))
+	})
+}
+
+func FuzzEncodeDecode(f *testing.F) {
+	type testcase struct {
+		encoded []byte
+		typeStr string
+	}
+
+	var testcases []testcase
+
+	// 512 random bits / 64 random bytes
+	randomBits, err := hex.DecodeString("586f2d6f7ab31b327c7264ce9499394fc4caa5e22eb66e7c694f9183956e7ca04a6226d10949b21af7ccddac2056b4ba37304e919ca6e7f9c0d29693fa2f3646")
+	require.NoError(f, err)
+
+	exampleBytes := func(length int) [][]byte {
+		lowValue := make([]byte, length)
+
+		highValue := make([]byte, length)
+		for i := range highValue {
+			highValue[i] = 0xFF
+		}
+
+		randomValue := randomBits[:length]
+
+		return [][]byte{lowValue, highValue, randomValue}
+	}
+
+	// uint<N>
+	for intSize := uintBegin; intSize <= uintEnd; intSize += uintStepLength {
+		typeStr := fmt.Sprintf("uint%d", intSize)
+		byteLength := intSize / 8
+
+		for _, encoded := range exampleBytes(byteLength) {
+			testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
+		}
+	}
+
+	// byte
+	for _, encoded := range exampleBytes(1) {
+		testcases = append(testcases, testcase{typeStr: "byte", encoded: encoded})
+	}
+
+	// ufixed<N>x<M>
+	for size := uintBegin; size <= uintEnd; size += uintStepLength {
+		for precision := 1; precision <= ufixedPrecision; precision++ {
+			typeStr := fmt.Sprintf("ufixed%dx%d", size, precision)
+			byteLength := size / 8
+
+			for _, encoded := range exampleBytes(byteLength) {
+				testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
+			}
+		}
+	}
+
+	// bool
+	for _, encoded := range [][]byte{{0x00}, {0x80}} {
+		testcases = append(testcases, testcase{typeStr: "bool", encoded: encoded})
+	}
+
+	// address
+	for _, encoded := range exampleBytes(32) {
+		testcases = append(testcases, testcase{typeStr: "address", encoded: encoded})
+	}
+
+	// bool[32]
+	for _, encoded := range exampleBytes(4) {
+		testcases = append(testcases, testcase{typeStr: "bool[32]", encoded: encoded})
+	}
+
+	for _, tc := range testcases {
+		f.Add(tc.encoded, tc.typeStr)
+	}
+
+	f.Fuzz(func(t *testing.T, encoded []byte, typeStr string) {
+		typeObj, err := TypeOf(typeStr)
+		if err != nil {
+			return
+		}
+
+		decoded, err := typeObj.Decode(encoded)
+		if err != nil {
+			return
+		}
+
+		encodedAgain, err := typeObj.Encode(decoded)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !bytes.Equal(encoded, encodedAgain) {
+			t.Errorf("Type %s, before: %v, after: %v", typeStr, encoded, encodedAgain)
+		}
+	})
 }
