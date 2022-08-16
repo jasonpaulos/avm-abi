@@ -1,12 +1,8 @@
 package abi
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
-	"fmt"
-	"math"
 	"math/big"
 	"testing"
 
@@ -55,7 +51,7 @@ const (
    Assuming that ABI implementation is correct, then the flaky test should not happen again.
 */
 
-func TestEncodeValid(t *testing.T) {
+func TestEncodeUint(t *testing.T) {
 	t.Parallel()
 	// encoding test for uint type, iterating through all uint sizes
 	// randomly pick 1000 valid uint values and check if encoded value match with expected
@@ -86,7 +82,10 @@ func TestEncodeValid(t *testing.T) {
 		require.NoError(t, err, "largest uint encode error")
 		require.Equal(t, largest.Bytes(), encoded, "encode uint largest do not match with expected")
 	}
+}
 
+func TestEncodeUfixed(t *testing.T) {
+	t.Parallel()
 	// encoding test for ufixed, iterating through all the valid ufixed bitSize and precision
 	// randomly generate 10 big int values for ufixed numerator and check if encoded value match with expected
 	// also check if ufixed can fit max numerator (2^bitSize - 1) under specific byte bitSize
@@ -118,7 +117,10 @@ func TestEncodeValid(t *testing.T) {
 				"encode ufixed largest do not match with expected")
 		}
 	}
+}
 
+func TestEncodeAddress(t *testing.T) {
+	t.Parallel()
 	// encoding test for address, since address is 32 byte, it can be considered as 256 bit uint
 	// randomly generate 1000 uint256 and make address values, check if encoded value match with expected
 	upperLimit := new(big.Int).Lsh(big.NewInt(1), addressByteSize<<3)
@@ -133,7 +135,30 @@ func TestEncodeValid(t *testing.T) {
 		require.NoError(t, err, "address encode fail")
 		require.Equal(t, addrBytesExpected, addrBytesActual, "encode addr not match with expected")
 	}
+}
 
+func FuzzEncodeAddress(f *testing.F) {
+	f.Add(make([]byte, 32))
+
+	f.Fuzz(func(t *testing.T, encodeInput []byte) {
+		if len(encodeInput) != 32 {
+			return
+		}
+
+		encoded, err := addressType.Encode(encodeInput)
+		require.NoError(t, err)
+
+		require.Len(t, encoded, 32)
+
+		roundTripResult, err := addressType.Decode(encoded)
+		require.NoError(t, err)
+
+		require.Equal(t, encodeInput, roundTripResult)
+	})
+}
+
+func TestEncodeBool(t *testing.T) {
+	t.Parallel()
 	// encoding test for bool values
 	for i := 0; i < boolTestCaseCount; i++ {
 		boolEncode, err := boolType.Encode(i == 1)
@@ -144,7 +169,10 @@ func TestEncodeValid(t *testing.T) {
 		}
 		require.Equal(t, expected, boolEncode, "encode bool not match with expected")
 	}
+}
 
+func TestEncodeByte(t *testing.T) {
+	t.Parallel()
 	// encoding test for byte values
 	for i := 0; i < byteTestCaseCount; i++ {
 		byteEncode, err := byteType.Encode(byte(i))
@@ -152,7 +180,28 @@ func TestEncodeValid(t *testing.T) {
 		expected := []byte{byte(i)}
 		require.Equal(t, expected, byteEncode, "encode byte not match with expected")
 	}
+}
 
+func FuzzEncodeByte(f *testing.F) {
+	for _, testcase := range []byte{0, 255} {
+		f.Add(testcase)
+	}
+
+	f.Fuzz(func(t *testing.T, encodeInput byte) {
+		encoded, err := byteType.Encode(encodeInput)
+		require.NoError(t, err)
+
+		require.Len(t, encoded, 1)
+
+		roundTripResult, err := byteType.Decode(encoded)
+		require.NoError(t, err)
+
+		require.Equal(t, encodeInput, roundTripResult)
+	})
+}
+
+func TestEncodeString(t *testing.T) {
+	t.Parallel()
 	// encoding test for string values, since strings in ABI contain utf-8 symbols
 	// we use `gobberish` to generate random utf-8 symbols
 	// randomly generate utf-8 str from length 1 to 100, each length draw 10 random strs
@@ -172,7 +221,28 @@ func TestEncodeValid(t *testing.T) {
 			require.Equal(t, expected, strEncode, "encode string not match with expected")
 		}
 	}
+}
 
+func FuzzEncodeString(f *testing.F) {
+	for _, testcase := range []string{"", "abc"} {
+		f.Add(testcase)
+	}
+
+	f.Fuzz(func(t *testing.T, encodeInput string) {
+		encoded, err := stringType.Encode(encodeInput)
+		require.NoError(t, err)
+
+		require.Len(t, encoded, 2+len(encodeInput))
+
+		roundTripResult, err := stringType.Decode(encoded)
+		require.NoError(t, err)
+
+		require.Equal(t, encodeInput, roundTripResult)
+	})
+}
+
+func TestEncodeValid(t *testing.T) {
+	t.Parallel()
 	// encoding test for static bool array, the expected behavior of encoding is to
 	// compress multiple bool into a single byte.
 	// input: {T, F, F, T, T}, encode expected: {0b10011000}
@@ -327,7 +397,7 @@ func TestEncodeValid(t *testing.T) {
 	})
 }
 
-func TestDecodeValid(t *testing.T) {
+func TestDecodeUint(t *testing.T) {
 	t.Parallel()
 	// decoding test for uint, iterating through all valid uint bitSize
 	// randomly take 1000 tests on each valid bitSize
@@ -361,7 +431,10 @@ func TestDecodeValid(t *testing.T) {
 			require.Equal(t, expected, actual, "decode uint fail to match expected value")
 		}
 	}
+}
 
+func TestDecodeUfixed(t *testing.T) {
+	t.Parallel()
 	// decoding test for ufixed, iterating through all valid ufixed bitSize and precision
 	// randomly take 10 tests on each valid setting
 	// generate ufixed bytes and try to decode back with additional type information
@@ -397,7 +470,10 @@ func TestDecodeValid(t *testing.T) {
 			}
 		}
 	}
+}
 
+func TestDecodeAddress(t *testing.T) {
+	t.Parallel()
 	// decoding test for address, randomly take 300 tests
 	// address is type alias of byte[32], we generate address value with random 256 bit big int values
 	// we make the expected address value and decode the encoding of expected, check if they match
@@ -413,7 +489,10 @@ func TestDecodeValid(t *testing.T) {
 		require.NoError(t, err, "decoding address should not return error")
 		require.Equal(t, expected, actual, "decode addr not match with expected")
 	}
+}
 
+func TestDecodeBool(t *testing.T) {
+	t.Parallel()
 	// bool value decoding test
 	for i := 0; i < 2; i++ {
 		boolEncode, err := boolType.Encode(i == 1)
@@ -422,7 +501,10 @@ func TestDecodeValid(t *testing.T) {
 		require.NoError(t, err, "decoding bool should not return error")
 		require.Equal(t, i == 1, actual, "decode bool not match with expected")
 	}
+}
 
+func TestDecodeByte(t *testing.T) {
+	t.Parallel()
 	// byte value decoding test, iterating through 256 valid byte value
 	for i := 0; i < byteTestCaseCount; i++ {
 		byteEncode, err := byteType.Encode(byte(i))
@@ -431,7 +513,10 @@ func TestDecodeValid(t *testing.T) {
 		require.NoError(t, err, "decoding byte should not return error")
 		require.Equal(t, byte(i), actual, "decode byte not match with expected")
 	}
+}
 
+func TestDecodeString(t *testing.T) {
+	t.Parallel()
 	// string value decoding test, test from utf string length 1 to 10
 	// randomly take 5 utf-8 strings to make ABI string values
 	// decode the encoded expected value and check if they match
@@ -445,7 +530,10 @@ func TestDecodeValid(t *testing.T) {
 			require.Equal(t, expected, actual, "encode string not match with expected")
 		}
 	}
+}
 
+func TestDecodeValid(t *testing.T) {
+	t.Parallel()
 	// decoding test for static bool array
 	// expected value: bool[5]: {T, F, F, T, T}
 	// input: 0b10011000
@@ -1205,141 +1293,141 @@ func TestInferToSlice(t *testing.T) {
 		"inferToSlice should return type inference error when passing argument type other than slice or array")
 }
 
-func TestEncodeUint(t *testing.T) {
-	uintType, err := TypeOf("uint64")
-	require.NoError(t, err)
+// func TestEncodeUint(t *testing.T) {
+// 	uintType, err := TypeOf("uint64")
+// 	require.NoError(t, err)
 
-	testcases := []struct {
-		input    interface{}
-		expected []byte
-	}{
-		{
-			input:    uint64(17),
-			expected: []byte{0, 0, 0, 0, 0, 0, 0, 17},
-		},
-	}
+// 	testcases := []struct {
+// 		input    interface{}
+// 		expected []byte
+// 	}{
+// 		{
+// 			input:    uint64(17),
+// 			expected: []byte{0, 0, 0, 0, 0, 0, 0, 17},
+// 		},
+// 	}
 
-	for _, tc := range testcases {
-		actual, err := uintType.Encode(tc.input)
-		require.NoError(t, err)
-		require.Equal(t, tc.expected, actual)
+// 	for _, tc := range testcases {
+// 		actual, err := uintType.Encode(tc.input)
+// 		require.NoError(t, err)
+// 		require.Equal(t, tc.expected, actual)
 
-		decoded, err := uintType.Decode(actual)
-		require.NoError(t, err)
-		require.Equal(t, tc.input, decoded)
-	}
-}
+// 		decoded, err := uintType.Decode(actual)
+// 		require.NoError(t, err)
+// 		require.Equal(t, tc.input, decoded)
+// 	}
+// }
 
-func FuzzEncodeUint(f *testing.F) {
-	testcases := []uint64{0, 17, math.MaxUint64}
-	for _, tc := range testcases {
-		f.Add(tc)
-	}
+// func FuzzEncodeUint(f *testing.F) {
+// 	testcases := []uint64{0, 17, math.MaxUint64}
+// 	for _, tc := range testcases {
+// 		f.Add(tc)
+// 	}
 
-	uintType, err := TypeOf("uint64")
-	require.NoError(f, err)
+// 	uintType, err := TypeOf("uint64")
+// 	require.NoError(f, err)
 
-	f.Fuzz(func(t *testing.T, input uint64) {
-		actual, err := uintType.Encode(input)
-		require.NoError(t, err)
+// 	f.Fuzz(func(t *testing.T, input uint64) {
+// 		actual, err := uintType.Encode(input)
+// 		require.NoError(t, err)
 
-		require.Len(t, actual, int(uintType.bitSize)/8)
+// 		require.Len(t, actual, int(uintType.bitSize)/8)
 
-		decoded, err := uintType.Decode(actual)
-		require.NoError(t, err)
-		require.Equal(t, input, decoded.(uint64))
-	})
-}
+// 		decoded, err := uintType.Decode(actual)
+// 		require.NoError(t, err)
+// 		require.Equal(t, input, decoded.(uint64))
+// 	})
+// }
 
-func FuzzEncodeDecode(f *testing.F) {
-	type testcase struct {
-		encoded []byte
-		typeStr string
-	}
+// func FuzzEncodeDecode(f *testing.F) {
+// 	type testcase struct {
+// 		encoded []byte
+// 		typeStr string
+// 	}
 
-	var testcases []testcase
+// 	var testcases []testcase
 
-	// 512 random bits / 64 random bytes
-	randomBits, err := hex.DecodeString("586f2d6f7ab31b327c7264ce9499394fc4caa5e22eb66e7c694f9183956e7ca04a6226d10949b21af7ccddac2056b4ba37304e919ca6e7f9c0d29693fa2f3646")
-	require.NoError(f, err)
+// 	// 512 random bits / 64 random bytes
+// 	randomBits, err := hex.DecodeString("586f2d6f7ab31b327c7264ce9499394fc4caa5e22eb66e7c694f9183956e7ca04a6226d10949b21af7ccddac2056b4ba37304e919ca6e7f9c0d29693fa2f3646")
+// 	require.NoError(f, err)
 
-	exampleBytes := func(length int) [][]byte {
-		lowValue := make([]byte, length)
+// 	exampleBytes := func(length int) [][]byte {
+// 		lowValue := make([]byte, length)
 
-		highValue := make([]byte, length)
-		for i := range highValue {
-			highValue[i] = 0xFF
-		}
+// 		highValue := make([]byte, length)
+// 		for i := range highValue {
+// 			highValue[i] = 0xFF
+// 		}
 
-		randomValue := randomBits[:length]
+// 		randomValue := randomBits[:length]
 
-		return [][]byte{lowValue, highValue, randomValue}
-	}
+// 		return [][]byte{lowValue, highValue, randomValue}
+// 	}
 
-	// uint<N>
-	for intSize := uintBegin; intSize <= uintEnd; intSize += uintStepLength {
-		typeStr := fmt.Sprintf("uint%d", intSize)
-		byteLength := intSize / 8
+// 	// uint<N>
+// 	for intSize := uintBegin; intSize <= uintEnd; intSize += uintStepLength {
+// 		typeStr := fmt.Sprintf("uint%d", intSize)
+// 		byteLength := intSize / 8
 
-		for _, encoded := range exampleBytes(byteLength) {
-			testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
-		}
-	}
+// 		for _, encoded := range exampleBytes(byteLength) {
+// 			testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
+// 		}
+// 	}
 
-	// byte
-	for _, encoded := range exampleBytes(1) {
-		testcases = append(testcases, testcase{typeStr: "byte", encoded: encoded})
-	}
+// 	// byte
+// 	for _, encoded := range exampleBytes(1) {
+// 		testcases = append(testcases, testcase{typeStr: "byte", encoded: encoded})
+// 	}
 
-	// ufixed<N>x<M>
-	for size := uintBegin; size <= uintEnd; size += uintStepLength {
-		for precision := 1; precision <= ufixedPrecision; precision++ {
-			typeStr := fmt.Sprintf("ufixed%dx%d", size, precision)
-			byteLength := size / 8
+// 	// ufixed<N>x<M>
+// 	for size := uintBegin; size <= uintEnd; size += uintStepLength {
+// 		for precision := 1; precision <= ufixedPrecision; precision++ {
+// 			typeStr := fmt.Sprintf("ufixed%dx%d", size, precision)
+// 			byteLength := size / 8
 
-			for _, encoded := range exampleBytes(byteLength) {
-				testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
-			}
-		}
-	}
+// 			for _, encoded := range exampleBytes(byteLength) {
+// 				testcases = append(testcases, testcase{typeStr: typeStr, encoded: encoded})
+// 			}
+// 		}
+// 	}
 
-	// bool
-	for _, encoded := range [][]byte{{0x00}, {0x80}} {
-		testcases = append(testcases, testcase{typeStr: "bool", encoded: encoded})
-	}
+// 	// bool
+// 	for _, encoded := range [][]byte{{0x00}, {0x80}} {
+// 		testcases = append(testcases, testcase{typeStr: "bool", encoded: encoded})
+// 	}
 
-	// address
-	for _, encoded := range exampleBytes(32) {
-		testcases = append(testcases, testcase{typeStr: "address", encoded: encoded})
-	}
+// 	// address
+// 	for _, encoded := range exampleBytes(32) {
+// 		testcases = append(testcases, testcase{typeStr: "address", encoded: encoded})
+// 	}
 
-	// bool[32]
-	for _, encoded := range exampleBytes(4) {
-		testcases = append(testcases, testcase{typeStr: "bool[32]", encoded: encoded})
-	}
+// 	// bool[32]
+// 	for _, encoded := range exampleBytes(4) {
+// 		testcases = append(testcases, testcase{typeStr: "bool[32]", encoded: encoded})
+// 	}
 
-	for _, tc := range testcases {
-		f.Add(tc.encoded, tc.typeStr)
-	}
+// 	for _, tc := range testcases {
+// 		f.Add(tc.encoded, tc.typeStr)
+// 	}
 
-	f.Fuzz(func(t *testing.T, encoded []byte, typeStr string) {
-		typeObj, err := TypeOf(typeStr)
-		if err != nil {
-			return
-		}
+// 	f.Fuzz(func(t *testing.T, encoded []byte, typeStr string) {
+// 		typeObj, err := TypeOf(typeStr)
+// 		if err != nil {
+// 			return
+// 		}
 
-		decoded, err := typeObj.Decode(encoded)
-		if err != nil {
-			return
-		}
+// 		decoded, err := typeObj.Decode(encoded)
+// 		if err != nil {
+// 			return
+// 		}
 
-		encodedAgain, err := typeObj.Encode(decoded)
-		if err != nil {
-			t.Error(err)
-		}
+// 		encodedAgain, err := typeObj.Encode(decoded)
+// 		if err != nil {
+// 			t.Error(err)
+// 		}
 
-		if !bytes.Equal(encoded, encodedAgain) {
-			t.Errorf("Type %s, before: %v, after: %v", typeStr, encoded, encodedAgain)
-		}
-	})
-}
+// 		if !bytes.Equal(encoded, encodedAgain) {
+// 			t.Errorf("Type %s, before: %v, after: %v", typeStr, encoded, encodedAgain)
+// 		}
+// 	})
+// }
