@@ -50,27 +50,69 @@ func (t Type) typeCastToTuple(tupLen ...int) (Type, error) {
 	return tuple, nil
 }
 
-// Encode is an ABI type method to encode Go values into bytes.
-//
-// Depending on the ABI type instance, different values are acceptable for this
-// method.
-//
-// The ABI `bool` type accepts Go bool types.
-//
-// The ABI `byte` type accepts Go byte/uint8 types.
-//
-// The ABI `uint<N>` and `ufixed<N>x<M>` types accept all native Go integer
-// types (uint/uint8/uint16/uint32/uint64/int/int8/int16/int32/int64) and
-// *big.Int. However, an error will be returned if a negative value is given.
-//
-// The ABI `string` type accepts Go string types.
-//
-// The ABI `address`, static array, dynamic array, and tuple types accept slices
-// and arrays of interfaces or specific types that are compatible with the
-// contents of the ABI type's contained types. For example, the `address` type
-// accepts Go types []interface{}, [32]interface{}, []byte, and [32]byte.
-func (t Type) Encode(value interface{}) ([]byte, error) {
+// EncodeWithReferenceResolvers TODO, docstring
+func (t Type) EncodeWithReferenceResolvers(value interface{}, accountAddressToIndex func([]byte) byte, assetIDToIndex, applicationIDToIndex func(uint64) byte) ([]byte, error) {
 	switch t.kind {
+	case Account:
+		if accountAddressToIndex == nil {
+			byteValue, ok := value.(byte)
+			if !ok {
+				return nil, fmt.Errorf("cannot cast value to byte in account encoding, got %T", value)
+			}
+			return []byte{byteValue}, nil
+		}
+		genericAddrValue, err := inferToSlice(value)
+		if err != nil {
+			return nil, err
+		}
+		if len(genericAddrValue) != addressByteSize {
+			return nil, fmt.Errorf("invalid account address length. Expected %d bytes, got %d bytes", addressByteSize, len(genericAddrValue))
+		}
+		var addrValue [addressByteSize]byte
+		for i, element := range genericAddrValue {
+			byteValue, ok := element.(byte)
+			if !ok {
+				return nil, fmt.Errorf("expected byte element type for account address, got %T", element)
+			}
+			addrValue[i] = byteValue
+		}
+		index := accountAddressToIndex(addrValue[:])
+		return []byte{index}, nil
+	case Asset, Application:
+		var idToIndex func(uint64) byte
+		if t.kind == Asset {
+			idToIndex = assetIDToIndex
+		} else {
+			idToIndex = applicationIDToIndex
+		}
+		if idToIndex == nil {
+			byteValue, ok := value.(byte)
+			if !ok {
+				var typeName string
+				if t.kind == Asset {
+					typeName = "asset"
+				} else {
+					typeName = "application"
+				}
+				return nil, fmt.Errorf("cannot cast value to byte in %s encoding, got %T", typeName, value)
+			}
+			return []byte{byteValue}, nil
+		}
+		bigIntValue, err := inferToBigInt(value)
+		if err != nil {
+			return nil, err
+		}
+		if bigIntValue.BitLen() > 64 {
+			var typeName string
+			if t.kind == Asset {
+				typeName = "asset"
+			} else {
+				typeName = "application"
+			}
+			return nil, fmt.Errorf("integer too large to be an %s ID, got %s", typeName, bigIntValue)
+		}
+		index := idToIndex(bigIntValue.Uint64())
+		return []byte{index}, nil
 	case Uint, Ufixed:
 		return encodeInt(value, t.bitSize)
 	case Bool:
@@ -136,8 +178,34 @@ func (t Type) Encode(value interface{}) ([]byte, error) {
 	}
 }
 
-// encodeInt encodes int-alike golang values to bytes, following ABI encoding rules
-func encodeInt(intValue interface{}, bitSize uint16) ([]byte, error) {
+// Encode is an ABI type method to encode Go values into bytes.
+//
+// Depending on the ABI type instance, different values are acceptable for this
+// method.
+//
+// The ABI `bool` type accepts Go bool types.
+//
+// The ABI `byte` type accepts Go byte/uint8 types.
+//
+// The ABI `uint<N>` and `ufixed<N>x<M>` types accept all native Go integer
+// types (uint/uint8/uint16/uint32/uint64/int/int8/int16/int32/int64) and
+// *big.Int. However, an error will be returned if a negative value is given.
+//
+// The ABI `string` type accepts Go string types.
+//
+// The ABI `address`, static array, dynamic array, and tuple types accept slices
+// and arrays of interfaces or specific types that are compatible with the
+// contents of the ABI type's contained types. For example, the `address` type
+// accepts Go types []interface{}, [32]interface{}, []byte, and [32]byte.
+//
+// The ABI `account`, `asset`, and `application` types accept Go byte/uint8
+// types, whose value indicates the referenced index of the value in the
+// appropriate transaction array.
+func (t Type) Encode(value interface{}) ([]byte, error) {
+	return t.EncodeWithReferenceResolvers(value, nil, nil, nil)
+}
+
+func inferToBigInt(intValue interface{}) (*big.Int, error) {
 	var bigInt *big.Int
 
 	switch intValue := intValue.(type) {
@@ -164,11 +232,21 @@ func encodeInt(intValue interface{}, bitSize uint16) ([]byte, error) {
 	case *big.Int:
 		bigInt = intValue
 	default:
-		return nil, fmt.Errorf("cannot infer go type for uint encode")
+		return nil, fmt.Errorf("cannot infer go type for uint encode, got %T", intValue)
 	}
 
 	if bigInt.Sign() < 0 {
-		return nil, fmt.Errorf("passed in numeric value should be non negative")
+		return nil, fmt.Errorf("passed in numeric value should be non negative, got %s", bigInt)
+	}
+
+	return bigInt, nil
+}
+
+// encodeInt encodes int-alike golang values to bytes, following ABI encoding rules
+func encodeInt(intValue interface{}, bitSize uint16) ([]byte, error) {
+	bigInt, err := inferToBigInt(intValue)
+	if err != nil {
+		return nil, err
 	}
 
 	castedBytes := make([]byte, bitSize/8)
@@ -339,7 +417,7 @@ func decodeUint(encoded []byte, bitSize uint16) (interface{}, error) {
 // the result in one of these interface values:
 //
 //	bool, for ABI `bool` types
-//	uint8/byte, for ABI `byte`, `uint8`, and `ufixed8x<M>` types, for all `M`
+//	uint8/byte, for ABI `account`, `asset`, `application`, `byte`, `uint8`, and `ufixed8x<M>` types, for all `M`
 //	uint16, for ABI `uint16` and `ufixed16x<M>` types, for all `M`
 //	uint32, for ABI `uint24`, `uint32`, `ufixed24x<M>`, and `ufixed32x<M>` types, for all `M`
 //	uint64, for ABI `uint48`, `uint56`, `uint64`, `ufixed48x<M>`, `ufixed56x<M>`, `ufixed64x<M>`, for all `M`
@@ -361,9 +439,20 @@ func (t Type) Decode(encoded []byte) (interface{}, error) {
 			return true, nil
 		}
 		return nil, fmt.Errorf("single boolean encoded byte should be of form 0x80 or 0x00")
-	case Byte:
+	case Byte, Account, Asset, Application:
 		if len(encoded) != 1 {
-			return nil, fmt.Errorf("byte should be length 1")
+			var typeString string
+			switch t.kind {
+			case Byte:
+				typeString = "byte"
+			case Account:
+				typeString = AccountReferenceType
+			case Asset:
+				typeString = AssetReferenceType
+			case Application:
+				typeString = ApplicationReferenceType
+			}
+			return nil, fmt.Errorf("%s should be length 1", typeString)
 		}
 		return encoded[0], nil
 	case ArrayStatic:

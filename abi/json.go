@@ -75,9 +75,16 @@ func castBigIntToNearestPrimitive(num *big.Int, bitSize uint16) (interface{}, er
 	}
 }
 
+// this should exist too i think
+func (t Type) MarshalToJSONWithReferenceResolvers(value interface{}, accountIndexToAddress map[byte][]byte, assetIndexToID, applicationIndexToID map[byte]uint64) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 // MarshalToJSON convert golang value to JSON format from ABI type
 func (t Type) MarshalToJSON(value interface{}) ([]byte, error) {
 	switch t.kind {
+	case Account, Asset, Application:
+		return nil, fmt.Errorf("unsupported reference type, use MarshalToJSONWithReferenceResolvers instead")
 	case Uint:
 		bytesUint, err := encodeInt(value, t.bitSize)
 		if err != nil {
@@ -171,9 +178,28 @@ func (t Type) MarshalToJSON(value interface{}) ([]byte, error) {
 	}
 }
 
-// UnmarshalFromJSON convert bytes to golang value following ABI type and encoding rules
-func (t Type) UnmarshalFromJSON(jsonEncoded []byte) (interface{}, error) {
+// UnmarshalFromJSONWithReferenceResolvers ...
+func (t Type) UnmarshalFromJSONWithReferenceResolvers(jsonEncoded []byte, accountAddressToIndex func([]byte) byte, assetIDToIndex, applicationIDToIndex func(uint64) byte) (interface{}, error) {
 	switch t.kind {
+	case Account:
+		var addrStr string
+		if err := json.Unmarshal(jsonEncoded, &addrStr); err != nil {
+			return nil, fmt.Errorf("cannot cast JSON encoded (%s) to address string: %w", string(jsonEncoded), err)
+		}
+
+		addrBytes, err := addressFromString(addrStr)
+		if err != nil {
+			return nil, err
+		}
+
+		if accountAddressToIndex == nil {
+			return nil, fmt.Errorf("accountAddressToIndex function not provided, cannot unmarshal account reference type")
+		}
+		index := accountAddressToIndex(addrBytes[:])
+		return index, nil
+	case Asset, Application:
+		// TODO
+		return nil, fmt.Errorf("not implemented")
 	case Uint:
 		num := new(big.Int)
 		if err := num.UnmarshalJSON(jsonEncoded); err != nil {
@@ -285,4 +311,13 @@ func (t Type) UnmarshalFromJSON(jsonEncoded []byte) (interface{}, error) {
 	default:
 		return nil, fmt.Errorf("cannot cast JSON encoded %s to ABI encoding stuff", string(jsonEncoded))
 	}
+}
+
+// UnmarshalFromJSON convert bytes to golang value following ABI type and encoding rules
+func (t Type) UnmarshalFromJSON(jsonEncoded []byte) (interface{}, error) {
+	switch t.kind {
+	case Account, Asset, Application:
+		return nil, fmt.Errorf("unsupported reference type, use UnmarshalFromJSONWithReferenceResolvers instead")
+	}
+	return t.UnmarshalFromJSONWithReferenceResolvers(jsonEncoded, nil, nil, nil)
 }

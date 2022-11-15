@@ -32,6 +32,12 @@ const (
 	String
 	// Tuple is the kind for ABI tuple types, i.e. `(<type 0>,...,<type k>)`.
 	Tuple
+	// Account is the kind for the ABI `account` type.
+	Account
+	// Asset is the kind for the ABI `asset` type.
+	Asset
+	// Application is the kind for the ABI `application` type.
+	Application
 )
 
 const (
@@ -39,6 +45,7 @@ const (
 	checksumByteSize       = 4
 	singleByteSize         = 1
 	singleBoolSize         = 1
+	referenceSize          = 1
 	lengthEncodeByteSize   = 2
 	abiEncodingLengthLimit = 1 << 16
 )
@@ -175,6 +182,12 @@ func TypeOf(str string) (Type, error) {
 			tupleTypes[i] = ti
 		}
 		return MakeTupleType(tupleTypes)
+	case str == AccountReferenceType:
+		return accountType, nil
+	case str == AssetReferenceType:
+		return assetType, nil
+	case str == ApplicationReferenceType:
+		return applicationType, nil
 	default:
 		return Type{}, fmt.Errorf(`cannot convert the string "%s" to an ABI type`, str)
 	}
@@ -285,6 +298,10 @@ var (
 
 	// stringType is ABI type constant for string
 	stringType = Type{kind: String}
+
+	accountType     = Type{kind: Account}
+	assetType       = Type{kind: Asset}
+	applicationType = Type{kind: Application}
 )
 
 // makeUfixedType makes `UFixed` ABI type by taking type bitSize and type precision as arguments.
@@ -405,6 +422,8 @@ func (t Type) ByteLen() (int, error) {
 		return int(t.bitSize / 8), nil
 	case Bool:
 		return singleBoolSize, nil
+	case Account, Asset, Application:
+		return referenceSize, nil
 	case ArrayStatic:
 		if t.childTypes[0].kind == Bool {
 			byteLen := int(t.staticLength+7) / 8
